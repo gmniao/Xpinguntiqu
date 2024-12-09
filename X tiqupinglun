@@ -1,0 +1,94 @@
+import tweepy
+import csv
+import re
+import time
+
+# 定义多个 API 密钥
+API_KEYS = [
+    {"BEARER_TOKEN": ""},
+]
+
+# 推文 URL
+tweet_url = "https://x.com/"
+
+def extract_tweet_info(url):
+    """
+    从推文 URL 提取 tweet_id 和用户名
+    """
+    pattern = r"https?://x\.com/([^/]+)/status/(\d+)"
+    match = re.match(pattern, url)
+    if match:
+        username, tweet_id = match.groups()
+        return username, tweet_id
+    else:
+        raise ValueError("无效的推文 URL，请检查格式！")
+
+def get_twitter_client(api_key):
+    """
+    根据 API 密钥创建 Twitter 客户端
+    """
+    return tweepy.Client(bearer_token=api_key["BEARER_TOKEN"])
+
+def get_comments_and_save_to_csv(tweet_id, filename="comments.csv"):
+    """
+    提取指定推文下的所有评论，并保存到 CSV 文件中，支持多个 API 密钥轮询
+    """
+    api_index = 0  # 当前使用的 API 密钥索引
+    client = get_twitter_client(API_KEYS[api_index])  # 初始化客户端
+    next_token = None  # 用于分页
+    total_comments = 0
+
+    try:
+        print(f"正在提取推文 {tweet_id} 下的评论...")
+        
+        with open(filename, mode="w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow(["User ID", "Comment"])  # 写入表头
+            
+            while True:
+                try:
+                    # 定义查询
+                    query = f"conversation_id:{tweet_id} -is:retweet"
+                    # 请求 API
+                    response = client.search_recent_tweets(
+                        query=query,
+                        tweet_fields=["author_id", "text"],
+                        max_results=100,
+                        next_token=next_token
+                    )
+                    
+                    # 检查是否有数据
+                    if not response or not response.data:
+                        print("没有更多评论了。")
+                        break
+
+                    # 写入评论数据
+                    for reply in response.data:
+                        writer.writerow([reply.author_id, reply.text])
+                        total_comments += 1
+                        print(f"已保存评论: {reply.text[:30]}...")  # 打印前 30 字符以确认
+
+                    # 检查下一页
+                    next_token = response.meta.get("next_token", None)
+                    if not next_token:
+                        break
+
+                except tweepy.TooManyRequests:
+                    # 速率限制时切换 API 密钥
+                    print("速率限制已达上限，切换到下一个 API 密钥...")
+                    api_index = (api_index + 1) % len(API_KEYS)  # 轮询密钥
+                    client = get_twitter_client(API_KEYS[api_index])  # 更新客户端
+                    time.sleep(15)  # 等待 15 秒避免封禁
+
+        print(f"评论已成功保存到 {filename}，共提取 {total_comments} 条评论。")
+
+    except Exception as e:
+        print(f"发生错误: {e}")
+
+# 主函数
+try:
+    username, tweet_id = extract_tweet_info(tweet_url)
+    print(f"解析 URL 成功：用户名 = {username}, 推文 ID = {tweet_id}")
+    get_comments_and_save_to_csv(tweet_id)
+except ValueError as e:
+    print(e)
